@@ -4,6 +4,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+import voluptuous as vol
 
 from homeassistant.components.input_text import (
     ATTR_MAX,
@@ -15,6 +16,8 @@ from homeassistant.components.input_text import (
     CONF_MIN_VALUE,
     DOMAIN,
     MODE_TEXT,
+    SERVICE_CREATE,
+    SERVICE_DELETE,
     SERVICE_SET_VALUE,
 )
 from homeassistant.const import (
@@ -25,7 +28,7 @@ from homeassistant.const import (
     SERVICE_RELOAD,
 )
 from homeassistant.core import Context, CoreState, HomeAssistant, State
-from homeassistant.exceptions import Unauthorized
+from homeassistant.exceptions import ServiceValidationError, Unauthorized
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
@@ -535,3 +538,174 @@ async def test_setup_no_config(hass: HomeAssistant, hass_admin_user: MockUser) -
         await hass.async_block_till_done()
 
     assert count_start == len(hass.states.async_entity_ids())
+
+
+async def test_service_create(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    storage_setup,
+) -> None:
+    """Test creating a helper via the create service."""
+    assert await storage_setup(items=[])
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CREATE,
+        {"name": "New Text"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get(f"{DOMAIN}.new_text")
+    assert state is not None
+    assert state.attributes.get(ATTR_FRIENDLY_NAME) == "New Text"
+    assert state.attributes.get(ATTR_EDITABLE)
+    assert entity_registry.async_get_entity_id(DOMAIN, DOMAIN, "new_text") is not None
+
+
+async def test_service_create_with_explicit_id(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    storage_setup,
+) -> None:
+    """Test creating a helper via the create service with an explicit ID."""
+    assert await storage_setup(items=[])
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CREATE,
+        {"name": "My Text", "id": "my_text", "min": 0, "max": 50, "initial": "hello"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get(f"{DOMAIN}.my_text")
+    assert state is not None
+    assert state.state == "hello"
+    assert state.attributes.get(ATTR_FRIENDLY_NAME) == "My Text"
+    assert state.attributes[ATTR_MAX] == 50
+    assert entity_registry.async_get_entity_id(DOMAIN, DOMAIN, "my_text") is not None
+
+
+async def test_service_create_duplicate_id(
+    hass: HomeAssistant,
+    storage_setup,
+) -> None:
+    """Test that creating with a duplicate ID raises an error."""
+    assert await storage_setup()
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CREATE,
+            {"name": "Dupe", "id": "from_storage"},
+            blocking=True,
+        )
+
+
+async def test_service_delete(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    storage_setup,
+) -> None:
+    """Test deleting a storage-based helper via the delete service."""
+    assert await storage_setup()
+
+    input_entity_id = f"{DOMAIN}.from_storage"
+    assert hass.states.get(input_entity_id) is not None
+    assert (
+        entity_registry.async_get_entity_id(DOMAIN, DOMAIN, "from_storage") is not None
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE,
+        {"entity_id": input_entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(input_entity_id) is None
+    assert entity_registry.async_get_entity_id(DOMAIN, DOMAIN, "from_storage") is None
+
+
+async def test_service_delete_yaml_entity(
+    hass: HomeAssistant,
+    storage_setup,
+) -> None:
+    """Test that deleting a YAML-defined helper raises an error."""
+    assert await storage_setup(
+        config={
+            DOMAIN: {
+                "from_yaml": {
+                    "initial": "yaml value",
+                    ATTR_MODE: MODE_TEXT,
+                    ATTR_MAX: 33,
+                    ATTR_MIN: 3,
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_DELETE,
+            {"entity_id": f"{DOMAIN}.from_yaml"},
+            blocking=True,
+        )
+
+
+async def test_service_delete_nonexistent_entity(
+    hass: HomeAssistant,
+    storage_setup,
+) -> None:
+    """Test that deleting a nonexistent entity raises an error."""
+    assert await storage_setup(items=[])
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_DELETE,
+            {"entity_id": f"{DOMAIN}.does_not_exist"},
+            blocking=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("data", "match"),
+    [
+        (
+            {"name": "Bad Range", "min": 50, "max": 10},
+            "greater than min",
+        ),
+        (
+            {"name": "Bad Initial", "min": 0, "max": 5, "initial": "toolongstring"},
+            "Initial value",
+        ),
+        (
+            {"name": "Bad Slug", "id": "has space"},
+            "invalid",
+        ),
+        (
+            {},
+            "required key not provided",
+        ),
+    ],
+)
+async def test_service_create_validation_errors(
+    hass: HomeAssistant,
+    storage_setup,
+    data: dict,
+    match: str,
+) -> None:
+    """Test that create service rejects invalid configurations."""
+    assert await storage_setup(items=[])
+
+    with pytest.raises((ServiceValidationError, vol.Invalid)):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CREATE,
+            data,
+            blocking=True,
+        )

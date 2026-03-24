@@ -29,7 +29,60 @@
       }
     }
   },
+  "exceptions": {
+    "entity_not_found": {
+      "message": "Entity {entity_id} is not found in the registry."
+    },
+    "entity_not_storage_based": {
+      "message": "Entity {entity_id} is YAML-defined and cannot be deleted."
+    },
+    "id_already_exists": {
+      "message": "A helper with ID {item_id} already exists."
+    }
+  },
   "services": {
+    "create": {
+      "description": "Creates a new input text helper.",
+      "fields": {
+        "icon": {
+          "description": "Icon for the helper.",
+          "name": "Icon"
+        },
+        "id": {
+          "description": "Object ID slug. The entity ID will be input_text.id.",
+          "name": "ID"
+        },
+        "initial": {
+          "description": "Initial value when the helper is created.",
+          "name": "Initial value"
+        },
+        "max": {
+          "description": "Maximum length of the text value.",
+          "name": "Maximum length"
+        },
+        "min": {
+          "description": "Minimum length of the text value.",
+          "name": "Minimum length"
+        },
+        "mode": {
+          "description": "Display mode of the helper.",
+          "name": "Mode"
+        },
+        "name": {
+          "description": "Friendly name of the helper.",
+          "name": "Name"
+        },
+        "pattern": {
+          "description": "Regex pattern the value must match.",
+          "name": "Pattern"
+        }
+      },
+      "name": "Create"
+    },
+    "delete": {
+      "description": "Deletes an input text helper.",
+      "name": "Delete"
+    },
     "reload": {
       "description": "Reloads helpers from the YAML-configuration.",
       "name": "Reload input texts"

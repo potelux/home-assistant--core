@@ -14,12 +14,16 @@ from homeassistant.const import (
     CONF_ID,
     CONF_MODE,
     CONF_NAME,
-    CONF_UNIT_OF_MEASUREMENT,
     MAX_LENGTH_STATE_STATE,
     SERVICE_RELOAD,
 )
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.helpers import collection, config_validation as cv
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import (
+    collection,
+    config_validation as cv,
+    entity_registry as er,
+)
 from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.restore_state import RestoreEntity
 import homeassistant.helpers.service
@@ -47,6 +51,8 @@ ATTR_MAX = "max"
 ATTR_PATTERN = CONF_PATTERN
 
 SERVICE_SET_VALUE = "set_value"
+SERVICE_CREATE = "create"
+SERVICE_DELETE = "delete"
 STORAGE_KEY = DOMAIN
 STORAGE_VERSION = 1
 
@@ -60,7 +66,17 @@ STORAGE_FIELDS: VolDictType = {
     ),
     vol.Optional(CONF_INITIAL, ""): cv.string,
     vol.Optional(CONF_ICON): cv.icon,
-    vol.Optional(CONF_UNIT_OF_MEASUREMENT): cv.string,
+    vol.Optional(CONF_PATTERN): cv.string,
+    vol.Optional(CONF_MODE, default=MODE_TEXT): vol.In([MODE_TEXT, MODE_PASSWORD]),
+}
+
+CREATE_FIELDS: VolDictType = {
+    vol.Required(CONF_NAME): vol.All(str, vol.Length(min=1)),
+    vol.Optional(CONF_ID): cv.slug,
+    vol.Optional(CONF_MIN, default=0): vol.Coerce(int),
+    vol.Optional(CONF_MAX, default=100): vol.Coerce(int),
+    vol.Optional(CONF_INITIAL, default=""): cv.string,
+    vol.Optional(CONF_ICON): cv.icon,
     vol.Optional(CONF_PATTERN): cv.string,
     vol.Optional(CONF_MODE, default=MODE_TEXT): vol.In([MODE_TEXT, MODE_PASSWORD]),
 }
@@ -82,6 +98,8 @@ def _cv_input_text(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+CREATE_SCHEMA = vol.All(vol.Schema(CREATE_FIELDS), _cv_input_text)
+
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: cv.schema_with_slug_keys(
@@ -97,7 +115,6 @@ CONFIG_SCHEMA = vol.Schema(
                     ),
                     vol.Optional(CONF_INITIAL): cv.string,
                     vol.Optional(CONF_ICON): cv.icon,
-                    vol.Optional(CONF_UNIT_OF_MEASUREMENT): cv.string,
                     vol.Optional(CONF_PATTERN): cv.string,
                     vol.Optional(CONF_MODE, default=MODE_TEXT): vol.In(
                         [MODE_TEXT, MODE_PASSWORD]
@@ -158,7 +175,56 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
 
     component.async_register_entity_service(
-        SERVICE_SET_VALUE, {vol.Required(ATTR_VALUE): cv.string}, "async_set_value"
+        SERVICE_SET_VALUE,
+        {vol.Required(ATTR_VALUE): cv.string},
+        "async_set_value",
+    )
+
+    async def handle_create(call: ServiceCall) -> None:
+        """Create a new helper programmatically."""
+        create_data = {k: v for k, v in call.data.items() if k != CONF_ID}
+        if CONF_ID in call.data:
+            item_id: str = call.data[CONF_ID]
+            if id_manager.has_id(item_id):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="id_already_exists",
+                    translation_placeholders={"item_id": item_id},
+                )
+        await storage_collection.async_create_item(create_data)
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_CREATE, handle_create, schema=CREATE_SCHEMA
+    )
+
+    async def handle_delete(call: ServiceCall) -> None:
+        """Delete a helper."""
+        registry = er.async_get(hass)
+        entity_ids = await homeassistant.helpers.service.async_extract_entity_ids(call)
+        for entity_id in entity_ids:
+            entry = registry.async_get(entity_id)
+            if entry is None:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="entity_not_found",
+                    translation_placeholders={"entity_id": entity_id},
+                )
+            item_id = entry.unique_id
+            if not any(
+                item["id"] == item_id for item in storage_collection.async_items()
+            ):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="entity_not_storage_based",
+                    translation_placeholders={"entity_id": entity_id},
+                )
+            await storage_collection.async_delete_item(item_id)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE,
+        handle_delete,
+        schema=cv.make_entity_service_schema({}),
     )
 
     return True
@@ -241,11 +307,6 @@ class InputText(collection.CollectionEntity, RestoreEntity):
     def state(self) -> str | None:
         """Return the state of the component."""
         return self._current_value
-
-    @property
-    def unit_of_measurement(self) -> str | None:
-        """Return the unit the value is expressed in."""
-        return self._config.get(CONF_UNIT_OF_MEASUREMENT)
 
     @property
     def unique_id(self) -> str:

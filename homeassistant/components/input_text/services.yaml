@@ -10,3 +10,49 @@ set_value:
         text:
 
 reload:
+
+create:
+  fields:
+    name:
+      required: true
+      selector:
+        text:
+    id:
+      selector:
+        text:
+    initial:
+      default: ""
+      selector:
+        text:
+    min:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    max:
+      default: 100
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    pattern:
+      selector:
+        text:
+    mode:
+      default: "text"
+      selector:
+        select:
+          options:
+            - "text"
+            - "password"
+    icon:
+      selector:
+        icon:
+
+delete:
+  target:
+    entity:
+      domain: input_text
