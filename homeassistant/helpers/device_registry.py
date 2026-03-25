@@ -775,6 +775,7 @@ class DeviceRegistry(BaseRegistry[dict[str, list[dict[str, Any]]]]):
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the device registry."""
         self.hass = hass
+        self._device_data: dict[str, DeviceEntry] = {}
         self._store = DeviceRegistryStore(
             hass,
             STORAGE_VERSION_MAJOR,
