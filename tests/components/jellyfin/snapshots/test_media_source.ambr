@@ -24,7 +24,7 @@
     'media_content_id': 'media-source://jellyfin/MOVIE-UUID',
     'media_content_type': 'video/mp4',
     'not_shown': 0,
-    'thumbnail': 'http://localhost/Items/MOVIE-UUID/Images/Primary.jpg',
+    'thumbnail': '/api/jellyfin_image_proxy/TEST-ENTRY-ID/MOVIE-UUID?tag=Primary&max_width=500',
     'title': 'MOVIE',
   })
 # ---
@@ -75,7 +75,7 @@
     'media_content_id': 'media-source://jellyfin/TRACK-UUID',
     'media_content_type': 'audio/flac',
     'not_shown': 0,
-    'thumbnail': 'http://localhost/Items/TRACK-UUID/Images/Primary.jpg',
+    'thumbnail': '/api/jellyfin_image_proxy/TEST-ENTRY-ID/TRACK-UUID?tag=Primary&max_width=500',
     'title': 'TRACK',
   })
 # ---
@@ -149,7 +149,7 @@
     'media_content_id': 'media-source://jellyfin/EPISODE-UUID',
     'media_content_type': 'video/mp4',
     'not_shown': 0,
-    'thumbnail': 'http://localhost/Items/EPISODE-UUID/Images/Primary.jpg',
+    'thumbnail': '/api/jellyfin_image_proxy/TEST-ENTRY-ID/EPISODE-UUID?tag=Primary&max_width=500',
     'title': 'EPISODE',
   })
 # ---

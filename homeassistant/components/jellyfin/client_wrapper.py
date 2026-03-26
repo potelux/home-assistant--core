@@ -93,33 +93,38 @@ def _get_user_id(api: API) -> str:
 
 
 def get_artwork_url(
-    client: JellyfinClient, item: dict[str, Any], max_width: int = 600
+    entry_id: str, item: dict[str, Any], max_width: int = 600
 ) -> str | None:
-    """Find a suitable thumbnail for an item."""
+    """Return a thumbnail URL served through Home Assistant's HTTP proxy.
+
+    Returns a path relative to the HA base URL so that artwork works over
+    HTTPS even when the Jellyfin server only speaks plain HTTP on the LAN.
+    """
     artwork_id: str | None = None
     artwork_type: str | None = None
+    image_tags: dict[str, Any] = item.get(ITEM_KEY_IMAGE_TAGS, {})
     parent_backdrop_id: str | None = item.get("ParentBackdropItemId")
 
     if "AlbumPrimaryImageTag" in item:
-        # jellyfin_apiclient_python doesn't support passing a specific tag to `.artwork`,
-        # so we don't use the actual value of AlbumPrimaryImageTag.
-        # However, its mere presence tells us that the album does have primary artwork,
-        # and the resulting URL will pull the primary album art even if the tag is not specified.
         artwork_type = "Primary"
-        artwork_id = item["AlbumId"]
-    elif "Backdrop" in item[ITEM_KEY_IMAGE_TAGS]:
+        artwork_id = item.get("AlbumId")
+    elif "Backdrop" in image_tags:
         artwork_type = "Backdrop"
-        artwork_id = item["Id"]
+        artwork_id = item.get("Id")
     elif parent_backdrop_id:
         artwork_type = "Backdrop"
         artwork_id = parent_backdrop_id
-    elif "Primary" in item[ITEM_KEY_IMAGE_TAGS]:
+    elif "Primary" in image_tags:
         artwork_type = "Primary"
-        artwork_id = item["Id"]
-    else:
+        artwork_id = item.get("Id")
+
+    if artwork_id is None or artwork_type is None:
         return None
 
-    return str(client.jellyfin.artwork(artwork_id, artwork_type, max_width))
+    return (
+        f"/api/jellyfin_image_proxy/{entry_id}/{artwork_id}"
+        f"?tag={artwork_type}&max_width={max_width}"
+    )
 
 
 class CannotConnect(exceptions.HomeAssistantError):
