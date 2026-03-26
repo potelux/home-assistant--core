@@ -17,6 +17,7 @@ from homeassistant.components.media_player import (
     SearchMediaQuery,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util.dt import parse_datetime
 
@@ -24,7 +25,7 @@ from .browse_media import build_item_response, build_root_response, search_items
 from .client_wrapper import get_artwork_url
 from .const import CONTENT_TYPE_MAP, LOGGER, MAX_IMAGE_WIDTH
 from .coordinator import JellyfinConfigEntry, JellyfinDataUpdateCoordinator
-from .entity import JellyfinClientEntity
+from .entity import JellyfinClientEntity, JellyfinServerEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +37,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up Jellyfin media_player from a config entry."""
     coordinator = entry.runtime_data
+
+    async_add_entities([JellyfinServerMediaPlayer(coordinator)])
 
     @callback
     def handle_coordinator_update() -> None:
@@ -52,6 +55,79 @@ async def async_setup_entry(
     handle_coordinator_update()
 
     entry.async_on_unload(coordinator.async_add_listener(handle_coordinator_update))
+
+
+class JellyfinServerMediaPlayer(JellyfinServerEntity, MediaPlayerEntity):
+    """A media player representing the Jellyfin server itself.
+
+    Always present regardless of connected client sessions. Provides media
+    browsing and searching so the Jellyfin library is accessible from the
+    Home Assistant media browser even when no client is actively connected.
+    """
+
+    _attr_name = None
+    _attr_supported_features = (
+        MediaPlayerEntityFeature.BROWSE_MEDIA | MediaPlayerEntityFeature.SEARCH_MEDIA
+    )
+
+    def __init__(self, coordinator: JellyfinDataUpdateCoordinator) -> None:
+        """Initialize the Jellyfin server media player."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.server_id}-server-player"
+
+    @property
+    def state(self) -> MediaPlayerState:
+        """Return IDLE when the server is reachable, OFF otherwise."""
+        if self.coordinator.last_update_success:
+            return MediaPlayerState.IDLE
+        return MediaPlayerState.OFF
+
+    async def async_play_media(
+        self,
+        media_type: MediaType | str,
+        media_id: str,
+        **kwargs: Any,
+    ) -> None:
+        """Raise an error — this entity represents the server, not a client."""
+        raise HomeAssistantError(
+            "The Jellyfin server player cannot play media directly. "
+            "Select a connected client session to play media."
+        )
+
+    async def async_browse_media(
+        self,
+        media_content_type: MediaType | str | None = None,
+        media_content_id: str | None = None,
+    ) -> BrowseMedia:
+        """Return a BrowseMedia instance for the media browser."""
+        entry_id = self.coordinator.config_entry.entry_id
+        if media_content_id is None or media_content_id == "media-source://jellyfin":
+            return await build_root_response(
+                self.hass,
+                self.coordinator.api_client,
+                self.coordinator.user_id,
+                entry_id,
+            )
+        return await build_item_response(
+            self.hass,
+            self.coordinator.api_client,
+            self.coordinator.user_id,
+            media_content_type,
+            media_content_id,
+            entry_id,
+        )
+
+    async def async_search_media(self, query: SearchMediaQuery) -> SearchMedia:
+        """Search the Jellyfin library."""
+        entry_id = self.coordinator.config_entry.entry_id
+        result = await search_items(
+            self.hass,
+            self.coordinator.api_client,
+            self.coordinator.user_id,
+            query,
+            entry_id,
+        )
+        return SearchMedia(result=result)
 
 
 class JellyfinMediaPlayer(JellyfinClientEntity, MediaPlayerEntity):
