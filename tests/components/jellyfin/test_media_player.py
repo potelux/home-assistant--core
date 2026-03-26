@@ -73,7 +73,7 @@ async def test_media_player(
     assert entry
     assert entry.device_id
     assert entry.entity_category is None
-    assert entry.unique_id == "SERVER-UUID-SESSION-UUID"
+    assert entry.unique_id == "SERVER-UUID-DEVICE-UUID"
 
     assert len(mock_api.sessions.mock_calls) == 1
     async_fire_time_changed(hass, utcnow() + timedelta(seconds=10))
@@ -134,7 +134,7 @@ async def test_media_player_music(
     assert entry
     assert entry.device_id is None
     assert entry.entity_category is None
-    assert entry.unique_id == "SERVER-UUID-SESSION-UUID-FOUR"
+    assert entry.unique_id == "SERVER-UUID-DEVICE-UUID-FOUR"
 
 
 async def test_services(
