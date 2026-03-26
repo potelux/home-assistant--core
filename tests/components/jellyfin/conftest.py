@@ -25,6 +25,7 @@ from tests.common import MockConfigEntry
 def mock_config_entry() -> MockConfigEntry:
     """Return the default mocked config entry."""
     return MockConfigEntry(
+        entry_id="TEST-ENTRY-ID",
         title="Jellyfin",
         domain=DOMAIN,
         data={

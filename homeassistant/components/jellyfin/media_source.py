@@ -7,8 +7,7 @@ import mimetypes
 import os
 from typing import Any
 
-from jellyfin_apiclient_python.api import jellyfin_url
-from jellyfin_apiclient_python.client import JellyfinClient
+from jellyfin_apiclient_python.api import API, jellyfin_url
 
 from homeassistant.components.media_player import BrowseError, MediaClass
 from homeassistant.components.media_source import (
@@ -54,11 +53,12 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_get_media_source(hass: HomeAssistant) -> MediaSource:
     """Set up Jellyfin media source."""
-    # Currently only a single Jellyfin server is supported
+    # Currently only a single Jellyfin server is supported.
+    # The entry may not be loaded yet (e.g. server temporarily unreachable on
+    # startup) so we do NOT access runtime_data here – JellyfinSource resolves
+    # it lazily when a browse or resolve request actually arrives.
     entry: JellyfinConfigEntry = hass.config_entries.async_entries(DOMAIN)[0]
-    coordinator = entry.runtime_data
-
-    return JellyfinSource(hass, coordinator.api_client, entry)
+    return JellyfinSource(hass, entry)
 
 
 class JellyfinSource(MediaSource):
@@ -66,18 +66,22 @@ class JellyfinSource(MediaSource):
 
     name: str = "Jellyfin"
 
-    def __init__(
-        self, hass: HomeAssistant, client: JellyfinClient, entry: JellyfinConfigEntry
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, entry: JellyfinConfigEntry) -> None:
         """Initialize the Jellyfin media source."""
         super().__init__(DOMAIN)
 
         self.hass = hass
         self.entry = entry
 
-        self.client = client
-        self.api = client.jellyfin
-        self.url = jellyfin_url(client, "")
+    @property
+    def api(self) -> API:
+        """Return the Jellyfin API, resolving the coordinator lazily."""
+        return self.entry.runtime_data.api_client.jellyfin
+
+    @property
+    def url(self) -> str:
+        """Return the base Jellyfin server URL."""
+        return str(jellyfin_url(self.entry.runtime_data.api_client, ""))
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Return a streamable URL and associated mime type."""
@@ -513,14 +517,22 @@ class JellyfinSource(MediaSource):
         return result["Items"]  # type: ignore[no-any-return]
 
     def _get_thumbnail_url(self, media_item: dict[str, Any]) -> str | None:
-        """Return the URL for the primary image of a media item if available."""
+        """Return a proxy URL for the primary image of a media item if available.
+
+        The URL points to Home Assistant's own HTTP server rather than directly
+        to the Jellyfin server, so artwork loads correctly when HA is accessed
+        remotely over HTTPS even if the Jellyfin server only speaks HTTP.
+        """
         image_tags = media_item[ITEM_KEY_IMAGE_TAGS]
 
         if "Primary" not in image_tags:
             return None
 
         item_id = media_item[ITEM_KEY_ID]
-        return str(self.api.artwork(item_id, "Primary", MAX_IMAGE_WIDTH))
+        return (
+            f"/api/jellyfin_image_proxy/{self.entry.entry_id}/{item_id}"
+            f"?tag=Primary&max_width={MAX_IMAGE_WIDTH}"
+        )
 
     def _get_stream_url(self, media_item: dict[str, Any]) -> str:
         """Return the stream URL for a media item."""

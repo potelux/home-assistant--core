@@ -48,10 +48,11 @@ async def item_payload(
     client: JellyfinClient,
     user_id: str,
     item: dict[str, Any],
+    entry_id: str,
 ) -> BrowseMedia:
     """Create response payload for a single media item."""
     title = item["Name"]
-    thumbnail = get_artwork_url(client, item, 600)
+    thumbnail = get_artwork_url(entry_id, item, 600)
 
     media_content_id = item["Id"]
     media_content_type = CONTENT_TYPE_MAP.get(item["Type"], MEDIA_TYPE_NONE)
@@ -69,13 +70,13 @@ async def item_payload(
 
 
 async def build_root_response(
-    hass: HomeAssistant, client: JellyfinClient, user_id: str
+    hass: HomeAssistant, client: JellyfinClient, user_id: str, entry_id: str
 ) -> BrowseMedia:
     """Create response payload for root folder."""
     folders = await hass.async_add_executor_job(client.jellyfin.get_media_folders)
 
     children = [
-        await item_payload(hass, client, user_id, folder)
+        await item_payload(hass, client, user_id, folder, entry_id)
         for folder in folders["Items"]
         if folder.get("CollectionType") in SUPPORTED_COLLECTION_TYPES
     ]
@@ -98,17 +99,21 @@ async def build_item_response(
     user_id: str,
     media_content_type: str | None,
     media_content_id: str,
+    entry_id: str,
 ) -> BrowseMedia:
     """Create response payload for the provided media query."""
     title, media, thumbnail, media_type = await get_media_info(
-        hass, client, user_id, media_content_id
+        hass, client, user_id, media_content_id, entry_id
     )
 
     if title is None or media is None:
         raise BrowseError(f"Media not found: {media_content_type} / {media_content_id}")
 
     children = await asyncio.gather(
-        *(item_payload(hass, client, user_id, media_item) for media_item in media)
+        *(
+            item_payload(hass, client, user_id, media_item, entry_id)
+            for media_item in media
+        )
     )
 
     response = BrowseMedia(
@@ -161,7 +166,11 @@ def fetch_items(
 
 
 async def search_items(
-    hass: HomeAssistant, client: JellyfinClient, user_id: str, query: SearchMediaQuery
+    hass: HomeAssistant,
+    client: JellyfinClient,
+    user_id: str,
+    query: SearchMediaQuery,
+    entry_id: str,
 ) -> list[BrowseMedia]:
     """Search items in Jellyfin server."""
     search_result: list[BrowseMedia] = []
@@ -195,7 +204,7 @@ async def search_items(
             media_content_id=item["Id"],
             media_content_type=content_type,
             title=item["Name"],
-            thumbnail=get_artwork_url(client, item),
+            thumbnail=get_artwork_url(entry_id, item),
             can_play=bool(content_type in PLAYABLE_MEDIA_TYPES),
             can_expand=item.get("IsFolder", False),
             children=None,
@@ -210,6 +219,7 @@ async def get_media_info(
     client: JellyfinClient,
     user_id: str,
     media_content_id: str,
+    entry_id: str,
 ) -> tuple[str | None, list[dict[str, Any]] | None, str | None, str | None]:
     """Fetch media info."""
     thumbnail: str | None = None
@@ -223,7 +233,7 @@ async def get_media_info(
         return None, None, None, None
 
     title = item["Name"]
-    thumbnail = get_artwork_url(client, item)
+    thumbnail = get_artwork_url(entry_id, item)
 
     if item.get("IsFolder"):
         media = await hass.async_add_executor_job(

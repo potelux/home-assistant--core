@@ -10,6 +10,7 @@ from homeassistant.helpers.typing import ConfigType
 from .client_wrapper import CannotConnect, InvalidAuth, create_client, validate_input
 from .const import CONF_CLIENT_DEVICE_ID, DEFAULT_NAME, DOMAIN, PLATFORMS
 from .coordinator import JellyfinConfigEntry, JellyfinDataUpdateCoordinator
+from .image_proxy import JellyfinImageProxyView
 from .services import async_setup_services
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -18,6 +19,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Jellyfin component."""
     await async_setup_services(hass)
+    hass.http.register_view(JellyfinImageProxyView())
     return True
 
 

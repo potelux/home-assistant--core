@@ -173,13 +173,13 @@ class JellyfinMediaPlayer(JellyfinClientEntity, MediaPlayerEntity):
     @property
     def media_image_url(self) -> str | None:
         """Image url of current playing media."""
-        # We always need the now playing item.
-        # If there is none, there's also no url
         if self.now_playing is None:
             return None
 
         return get_artwork_url(
-            self.coordinator.api_client, self.now_playing, MAX_IMAGE_WIDTH
+            self.coordinator.config_entry.entry_id,
+            self.now_playing,
+            MAX_IMAGE_WIDTH,
         )
 
     @property
@@ -291,9 +291,14 @@ class JellyfinMediaPlayer(JellyfinClientEntity, MediaPlayerEntity):
         The BrowseMedia instance will be used by the "media_player/browse_media" websocket command.
 
         """
+        entry_id = self.coordinator.config_entry.entry_id
+
         if media_content_id is None or media_content_id == "media-source://jellyfin":
             return await build_root_response(
-                self.hass, self.coordinator.api_client, self.coordinator.user_id
+                self.hass,
+                self.coordinator.api_client,
+                self.coordinator.user_id,
+                entry_id,
             )
 
         return await build_item_response(
@@ -302,6 +307,7 @@ class JellyfinMediaPlayer(JellyfinClientEntity, MediaPlayerEntity):
             self.coordinator.user_id,
             media_content_type,
             media_content_id,
+            entry_id,
         )
 
     async def async_search_media(
@@ -309,7 +315,12 @@ class JellyfinMediaPlayer(JellyfinClientEntity, MediaPlayerEntity):
         query: SearchMediaQuery,
     ) -> SearchMedia:
         """Search the media player."""
+        entry_id = self.coordinator.config_entry.entry_id
         result = await search_items(
-            self.hass, self.coordinator.api_client, self.coordinator.user_id, query
+            self.hass,
+            self.coordinator.api_client,
+            self.coordinator.user_id,
+            query,
+            entry_id,
         )
         return SearchMedia(result=result)
