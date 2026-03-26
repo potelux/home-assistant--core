@@ -235,6 +235,7 @@ DEFAULT_INTEGRATIONS = {
     "input_select",
     "input_text",
     "schedule",
+    "shell_command",
     "timer",
     #
     # Base platforms:

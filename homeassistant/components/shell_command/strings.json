@@ -1,4 +1,26 @@
 {
+  "config": {
+    "abort": {
+      "already_configured": "A shell command with this name is already configured."
+    },
+    "error": {
+      "already_configured": "A shell command with this name is already configured.",
+      "invalid_name": "The name must contain at least one letter or number."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "command": "Command",
+          "name": "Name"
+        },
+        "data_description": {
+          "command": "The shell command to execute. Supports Jinja2 templates.",
+          "name": "A name for this shell command. Used to derive the service ID."
+        },
+        "title": "Add Shell Command"
+      }
+    }
+  },
   "exceptions": {
     "non_utf8_output": {
       "message": "Unable to handle non-utf8 output of command: `{command}`"
@@ -7,9 +29,22 @@
       "message": "Timed out running command: `{command}`, after: {timeout} seconds"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "command": "Command"
+        },
+        "data_description": {
+          "command": "The shell command to execute. Supports Jinja2 templates."
+        },
+        "title": "Edit Shell Command"
+      }
+    }
+  },
   "services": {
     "reload": {
-      "description": "Reloads shell commands from the YAML configuration.",
+      "description": "Reloads shell commands from the YAML-configuration.",
       "name": "Reload"
     }
   }

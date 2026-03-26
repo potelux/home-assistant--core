@@ -640,6 +640,7 @@ FLOWS = {
         "sfr_box",
         "sftp_storage",
         "sharkiq",
+        "shell_command",
         "shelly",
         "shopping_list",
         "sia",
