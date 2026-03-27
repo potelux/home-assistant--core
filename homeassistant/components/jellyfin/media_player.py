@@ -17,7 +17,6 @@ from homeassistant.components.media_player import (
     SearchMediaQuery,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util.dt import parse_datetime
 
@@ -88,11 +87,7 @@ class JellyfinServerMediaPlayer(JellyfinServerEntity, MediaPlayerEntity):
         media_id: str,
         **kwargs: Any,
     ) -> None:
-        """Raise an error — this entity represents the server, not a client."""
-        raise HomeAssistantError(
-            "The Jellyfin server player cannot play media directly. "
-            "Select a connected client session to play media."
-        )
+        """No-op: the server player cannot directly play media."""
 
     async def async_browse_media(
         self,
