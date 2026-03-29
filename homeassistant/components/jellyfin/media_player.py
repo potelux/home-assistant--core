@@ -18,7 +18,6 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.event import async_call_later
 from homeassistant.util.dt import parse_datetime
 
 from .browse_media import build_item_response, build_root_response, search_items
@@ -90,16 +89,7 @@ class JellyfinServerMediaPlayer(JellyfinServerEntity, MediaPlayerEntity):
         media_id: str,
         **kwargs: Any,
     ) -> None:
-        """Briefly signal playing state so the media browser popup closes."""
-        self._attr_state = MediaPlayerState.PLAYING
-        self.async_write_ha_state()
-
-        @callback
-        def _reset(_now: Any) -> None:
-            self._attr_state = None
-            self.async_write_ha_state()
-
-        async_call_later(self.hass, 2, _reset)
+        """No-op: the server player cannot directly play media."""
 
     async def async_browse_media(
         self,
