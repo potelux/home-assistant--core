@@ -93,7 +93,7 @@ class JellyfinServerMediaPlayer(JellyfinServerEntity, MediaPlayerEntity):
         """Briefly signal playing state so the media browser popup closes."""
         self._attr_state = MediaPlayerState.PLAYING
         self.async_write_ha_state()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(2)
         self._attr_state = None
         self.async_write_ha_state()
 
