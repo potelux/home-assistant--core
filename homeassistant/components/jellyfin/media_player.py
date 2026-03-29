@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -89,7 +90,12 @@ class JellyfinServerMediaPlayer(JellyfinServerEntity, MediaPlayerEntity):
         media_id: str,
         **kwargs: Any,
     ) -> None:
-        """No-op: the server player cannot directly play media."""
+        """Briefly signal playing state so the media browser popup closes."""
+        self._attr_state = MediaPlayerState.PLAYING
+        self.async_write_ha_state()
+        await asyncio.sleep(0.5)
+        self._attr_state = None
+        self.async_write_ha_state()
 
     async def async_browse_media(
         self,
