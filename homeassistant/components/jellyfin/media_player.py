@@ -66,7 +66,9 @@ class JellyfinServerMediaPlayer(JellyfinServerEntity, MediaPlayerEntity):
 
     _attr_name = None
     _attr_supported_features = (
-        MediaPlayerEntityFeature.BROWSE_MEDIA | MediaPlayerEntityFeature.SEARCH_MEDIA
+        MediaPlayerEntityFeature.BROWSE_MEDIA
+        | MediaPlayerEntityFeature.SEARCH_MEDIA
+        | MediaPlayerEntityFeature.PLAY_MEDIA
     )
 
     def __init__(self, coordinator: JellyfinDataUpdateCoordinator) -> None:
