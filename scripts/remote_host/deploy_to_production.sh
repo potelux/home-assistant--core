@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Deploy the remote-host addon management backend to a production Home Assistant instance.
 #
-# Supports HA OS / HA Container (via docker exec + docker cp) and HA Core (direct).
-# Run from the HA host shell (Terminal & SSH add-on, or direct SSH into HA OS).
+# Locates the hassio component directory and overwrites the relevant files.
+# Does NOT interact with the running HA process — just places files so they
+# are picked up on the next restart.
 #
 # Usage (paste into HA terminal):
 #   curl -fsSL https://raw.githubusercontent.com/potelux/home-assistant--core/feature/remote-host-addon-management/scripts/remote_host/deploy_to_production.sh | bash
@@ -14,39 +15,40 @@ set -euo pipefail
 BRANCH="feature/remote-host-addon-management"
 REPO="potelux/home-assistant--core"
 BASE_URL="https://raw.githubusercontent.com/$REPO/$BRANCH/homeassistant/components/hassio"
-CONTAINER="homeassistant"
+CONTAINER="${CONTAINER:-homeassistant}"
 
 echo "=== Deploying remote-host addon management backend ==="
 echo "  Branch : $BRANCH"
 echo ""
 
-# Detect whether HA is running in a Docker container or installed locally
-USE_DOCKER=false
-if command -v docker &>/dev/null && docker inspect "$CONTAINER" &>/dev/null 2>&1; then
-    USE_DOCKER=true
-fi
+# --- Locate the hassio component directory ---
+HASSIO_DIR="${HASSIO_DIR:-}"
 
-# Find the hassio component directory
-if [[ "$USE_DOCKER" == "true" ]]; then
-    echo "  Mode   : Docker (container: $CONTAINER)"
-    HASSIO_DIR=$(docker exec "$CONTAINER" python3 -c "
-import importlib.util, os
-spec = importlib.util.find_spec('homeassistant.components.hassio')
-print(os.path.dirname(spec.origin))
-")
-else
-    echo "  Mode   : Local Python"
-    HASSIO_DIR=$(python3 -c "
-import importlib.util, os
-spec = importlib.util.find_spec('homeassistant.components.hassio')
-print(os.path.dirname(spec.origin))
-" 2>/dev/null || true)
+if [[ -z "$HASSIO_DIR" ]]; then
+    # Strategy 1: look for it in the Docker container's merged filesystem (HA OS / Container)
+    if command -v docker &>/dev/null && docker inspect "$CONTAINER" &>/dev/null 2>&1; then
+        ROOTFS=$(docker inspect "$CONTAINER" --format='{{.GraphDriver.Data.MergedDir}}' 2>/dev/null || true)
+        if [[ -n "$ROOTFS" ]]; then
+            HASSIO_DIR=$(find "$ROOTFS" -maxdepth 15 -type f \
+                -name "websocket_api.py" -path "*/homeassistant/components/hassio/*" \
+                2>/dev/null | head -1 | xargs -r dirname)
+        fi
+    fi
 fi
 
 if [[ -z "$HASSIO_DIR" ]]; then
-    echo "ERROR: Could not locate homeassistant.components.hassio"
-    echo "  Tried Docker container '$CONTAINER' and local Python."
-    echo "  If using a different container name, set: CONTAINER=<name> before running."
+    # Strategy 2: search common local install paths (HA Core in a venv)
+    HASSIO_DIR=$(find /usr /home /srv /opt /root -maxdepth 15 -type f \
+        -name "websocket_api.py" -path "*/homeassistant/components/hassio/*" \
+        2>/dev/null | head -1 | xargs -r dirname || true)
+fi
+
+if [[ -z "$HASSIO_DIR" ]]; then
+    echo "ERROR: Could not locate homeassistant/components/hassio/"
+    echo ""
+    echo "Set the path manually and retry:"
+    echo "  HASSIO_DIR=/path/to/homeassistant/components/hassio \\"
+    echo "    bash <(curl -fsSL $BASE_URL/../../../scripts/remote_host/deploy_to_production.sh)"
     exit 1
 fi
 
@@ -55,14 +57,15 @@ echo ""
 
 FILES="__init__.py const.py websocket_api.py remote_host.py"
 
-# Download files to a temp directory
+# Download and install each file
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 FAILED=0
 for f in $FILES; do
     if curl -fsSL "$BASE_URL/$f" -o "$TMPDIR/$f" 2>/dev/null; then
-        echo "  downloaded: $f"
+        cp "$TMPDIR/$f" "$HASSIO_DIR/$f"
+        echo "  ok: $f"
     else
         echo "  FAIL: $f"
         FAILED=$((FAILED + 1))
@@ -76,19 +79,6 @@ if [[ "$FAILED" -gt 0 ]]; then
 fi
 
 echo ""
-
-# Copy files into place
-for f in $FILES; do
-    if [[ "$USE_DOCKER" == "true" ]]; then
-        docker cp "$TMPDIR/$f" "$CONTAINER:$HASSIO_DIR/$f"
-    else
-        cp "$TMPDIR/$f" "$HASSIO_DIR/$f"
-    fi
-    echo "  installed: $f"
-done
-
-echo ""
 echo "=== Deploy complete ==="
 echo ""
-echo "IMPORTANT: full HA restart required to load new Python code:"
-echo "  Settings → System → Restart → Restart Home Assistant"
+echo "Restart Home Assistant to apply: Settings → System → Restart → Restart Home Assistant"
