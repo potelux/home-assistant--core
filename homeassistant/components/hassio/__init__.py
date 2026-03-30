@@ -114,6 +114,7 @@ from .const import (
     DATA_KEY_SUPERVISOR_ISSUES,
     DATA_NETWORK_INFO,
     DATA_OS_INFO,
+    DATA_REMOTE_HOST_MANAGER,
     DATA_STORE,
     DATA_SUPERVISOR_INFO,
     DOMAIN,
@@ -145,6 +146,7 @@ from .handler import (
 from .http import HassIOView
 from .ingress import async_setup_ingress_view
 from .issues import SupervisorIssues
+from .remote_host import RemoteHostManager
 from .websocket_api import async_load_websocket_api
 
 # Expose the future safe name now so integrations can use it
@@ -409,6 +411,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:  # noqa:
     config_store = HassioConfig(hass)
     await config_store.load()
     hass.data[DATA_CONFIG_STORE] = config_store
+
+    # Set up remote host manager
+    remote_host_manager = RemoteHostManager(hass, websession)
+    await remote_host_manager.async_setup()
+    hass.data[DATA_REMOTE_HOST_MANAGER] = remote_host_manager
 
     refresh_token = None
     if (hassio_user := config_store.data.hassio_user) is not None:

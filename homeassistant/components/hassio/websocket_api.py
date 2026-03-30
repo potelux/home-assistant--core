@@ -25,13 +25,17 @@ from .const import (
     ATTR_ENDPOINT,
     ATTR_METHOD,
     ATTR_PARAMS,
+    ATTR_PASSWORD,
     ATTR_SESSION_DATA_USER_ID,
     ATTR_SLUG,
     ATTR_TIMEOUT,
+    ATTR_URL,
+    ATTR_USERNAME,
     ATTR_VERSION,
     ATTR_WS_EVENT,
     DATA_COMPONENT,
     DATA_CONFIG_STORE,
+    DATA_REMOTE_HOST_MANAGER,
     EVENT_SUPERVISOR_EVENT,
     WS_ID,
     WS_TYPE,
@@ -40,6 +44,12 @@ from .const import (
     WS_TYPE_SUBSCRIBE,
 )
 from .coordinator import get_addons_list
+from .remote_host import (
+    RemoteHostAuthError,
+    RemoteHostConnectionError,
+    RemoteHostError,
+    RemoteHostNotFoundError,
+)
 from .update_helper import update_addon, update_core
 
 SCHEMA_WEBSOCKET_EVENT = vol.Schema(
@@ -70,6 +80,14 @@ def async_load_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_update_core)
     websocket_api.async_register_command(hass, websocket_update_config_info)
     websocket_api.async_register_command(hass, websocket_update_config_update)
+    websocket_api.async_register_command(hass, websocket_remote_hosts_list)
+    websocket_api.async_register_command(hass, websocket_remote_discover)
+    websocket_api.async_register_command(hass, websocket_remote_connect)
+    websocket_api.async_register_command(hass, websocket_remote_remove)
+    websocket_api.async_register_command(hass, websocket_remote_ping)
+    websocket_api.async_register_command(hass, websocket_remote_addons_list)
+    websocket_api.async_register_command(hass, websocket_remote_addon_info)
+    websocket_api.async_register_command(hass, websocket_remote_addon_logs)
 
 
 @callback
@@ -231,3 +249,246 @@ def websocket_update_config_update(
         update_config=cast(HassioUpdateParametersDict, changes)
     )
     connection.send_result(msg["id"])
+
+
+# ---------------------------------------------------------------------------
+# Remote host management WebSocket commands
+# ---------------------------------------------------------------------------
+
+
+def _require_remote_manager(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg_id: int
+) -> Any:
+    """Return the RemoteHostManager or send an error and return None."""
+    manager = hass.data.get(DATA_REMOTE_HOST_MANAGER)
+    if manager is None:
+        connection.send_error(
+            msg_id,
+            websocket_api.ERR_NOT_SUPPORTED,
+            "Remote host management is not available",
+        )
+    return manager
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hassio/remote/hosts/list"})
+@callback
+def websocket_remote_hosts_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return the list of connected remote hosts."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    connection.send_result(
+        msg[WS_ID],
+        {"hosts": [host.to_dict() for host in manager.get_hosts()]},
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "hassio/remote/discover"})
+@websocket_api.async_response
+async def websocket_remote_discover(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Discover Home Assistant instances on the local network via mDNS."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    try:
+        discovered = await manager.async_discover()
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Remote discovery failed: %s", err)
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNKNOWN_ERROR, str(err))
+        return
+    connection.send_result(msg[WS_ID], {"hosts": discovered})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hassio/remote/connect",
+        vol.Required(ATTR_URL): str,
+        vol.Required(ATTR_USERNAME): str,
+        vol.Required(ATTR_PASSWORD): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_remote_connect(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Connect to a remote Home Assistant instance."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    try:
+        host = await manager.async_connect(
+            msg[ATTR_URL], msg[ATTR_USERNAME], msg[ATTR_PASSWORD]
+        )
+    except RemoteHostAuthError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNAUTHORIZED, str(err))
+        return
+    except RemoteHostConnectionError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNKNOWN_ERROR, str(err))
+        return
+    except RemoteHostError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNKNOWN_ERROR, str(err))
+        return
+    connection.send_result(msg[WS_ID], host.to_dict())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hassio/remote/hosts/remove",
+        vol.Required("host_id"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_remote_remove(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove a connected remote host."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    removed = await manager.async_remove_host(msg["host_id"])
+    if not removed:
+        connection.send_error(
+            msg[WS_ID], websocket_api.ERR_NOT_FOUND, "Remote host not found"
+        )
+        return
+    connection.send_result(msg[WS_ID], {})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hassio/remote/hosts/ping",
+        vol.Required("host_id"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_remote_ping(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Test connectivity to a remote host and update its status."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    try:
+        host = await manager.async_ping_host(msg["host_id"])
+    except RemoteHostNotFoundError:
+        connection.send_error(
+            msg[WS_ID], websocket_api.ERR_NOT_FOUND, "Remote host not found"
+        )
+        return
+    connection.send_result(msg[WS_ID], host.to_dict())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hassio/remote/hosts/addons",
+        vol.Required("host_id"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_remote_addons_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return the list of addons installed on a remote host."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    try:
+        addons = await manager.async_get_remote_addons(msg["host_id"])
+    except RemoteHostNotFoundError:
+        connection.send_error(
+            msg[WS_ID], websocket_api.ERR_NOT_FOUND, "Remote host not found"
+        )
+        return
+    except RemoteHostAuthError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNAUTHORIZED, str(err))
+        return
+    except RemoteHostConnectionError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNKNOWN_ERROR, str(err))
+        return
+    connection.send_result(msg[WS_ID], {"addons": addons})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hassio/remote/hosts/addon/info",
+        vol.Required("host_id"): str,
+        vol.Required(ATTR_SLUG): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_remote_addon_info(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return detailed info for a specific addon on a remote host."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    try:
+        info = await manager.async_get_remote_addon_info(msg["host_id"], msg[ATTR_SLUG])
+    except RemoteHostNotFoundError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_NOT_FOUND, str(err))
+        return
+    except RemoteHostAuthError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNAUTHORIZED, str(err))
+        return
+    except RemoteHostConnectionError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNKNOWN_ERROR, str(err))
+        return
+    connection.send_result(msg[WS_ID], info)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "hassio/remote/hosts/addon/logs",
+        vol.Required("host_id"): str,
+        vol.Required(ATTR_SLUG): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_remote_addon_logs(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return logs for a specific addon on a remote host."""
+    manager = _require_remote_manager(hass, connection, msg[WS_ID])
+    if manager is None:
+        return
+    try:
+        logs = await manager.async_get_remote_addon_logs(msg["host_id"], msg[ATTR_SLUG])
+    except RemoteHostNotFoundError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_NOT_FOUND, str(err))
+        return
+    except RemoteHostAuthError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNAUTHORIZED, str(err))
+        return
+    except RemoteHostConnectionError as err:
+        connection.send_error(msg[WS_ID], websocket_api.ERR_UNKNOWN_ERROR, str(err))
+        return
+    connection.send_result(msg[WS_ID], {"logs": logs})
