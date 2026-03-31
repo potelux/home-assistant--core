@@ -293,7 +293,7 @@ class RemoteHostManager:
                 flow_id = flow_data.get("flow_id")
                 if not flow_id:
                     raise RemoteHostAuthError("No flow_id in login flow response")
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise RemoteHostConnectionError(f"Cannot reach {url}: {err}") from err
 
         # Step 2: Submit credentials
@@ -310,19 +310,46 @@ class RemoteHostManager:
                     raise RemoteHostAuthError(
                         "Authentication did not complete successfully"
                     )
-                # The result may be a short-lived token or a code depending on HA version
                 result = auth_data.get("result", {})
-                access_token: str = (
-                    result.get("access_token", "")
-                    if isinstance(result, dict)
-                    else str(result)
-                )
-                if not access_token:
-                    raise RemoteHostAuthError(
-                        "No access_token in authentication result"
-                    )
-        except aiohttp.ClientError as err:
+                if isinstance(result, dict):
+                    # Some environments return the access token directly
+                    access_token: str = result.get("access_token", "")
+                    if not access_token:
+                        raise RemoteHostAuthError(
+                            "No access_token in authentication result"
+                        )
+                else:
+                    # Real HA returns an authorization code; exchange it for a token
+                    access_token = ""
+                    auth_code = str(result)
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise RemoteHostConnectionError(f"Cannot reach {url}: {err}") from err
+
+        # Step 2b: Exchange authorization code for access token (real HA auth flow)
+        if not access_token:
+            try:
+                async with self._websession.post(
+                    f"{url}/auth/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": auth_code,
+                        "client_id": url,
+                        "redirect_uri": url,
+                    },
+                    timeout=aiohttp.ClientTimeout(total=CONNECTION_TIMEOUT),
+                ) as resp:
+                    if resp.status != 200:
+                        raise RemoteHostAuthError(
+                            f"Authorization code exchange failed: HTTP {resp.status}"
+                        )
+                    token_data = await resp.json()
+                    access_token = token_data.get("access_token", "")
+                    if not access_token:
+                        raise RemoteHostAuthError(
+                            "No access_token in token exchange response"
+                        )
+            except (aiohttp.ClientError, TimeoutError) as err:
+                raise RemoteHostConnectionError(f"Cannot reach {url}: {err}") from err
 
         # Step 3: Verify the token works and fetch the instance name
         try:
@@ -339,7 +366,7 @@ class RemoteHostManager:
                     )
                 api_info = await resp.json()
                 name: str = api_info.get("location_name") or url
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise RemoteHostConnectionError(
                 f"Cannot verify connection to {url}: {err}"
             ) from err

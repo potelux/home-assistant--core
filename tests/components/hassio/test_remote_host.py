@@ -234,6 +234,39 @@ class TestRemoteHostManager:
         with pytest.raises(RemoteHostAuthError):
             await manager.async_connect(REMOTE_URL, "admin", "wrong-password")
 
+    async def test_connect_real_ha_auth_flow(
+        self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+    ) -> None:
+        """async_connect should exchange the auth code for a token (real HA flow)."""
+        session = async_get_clientsession(hass)
+        manager = RemoteHostManager(hass, session)
+        with patch.object(manager._store._store, "async_load", return_value=None):
+            await manager.async_setup()
+
+        # Real HA returns an authorization code string, not access_token directly
+        aioclient_mock.post(
+            f"{REMOTE_URL}/auth/login_flow",
+            json={"flow_id": "abc123", "type": "form"},
+        )
+        aioclient_mock.post(
+            f"{REMOTE_URL}/auth/login_flow/abc123",
+            json={"type": "create_entry", "result": "auth-code-xyz"},
+        )
+        aioclient_mock.post(
+            f"{REMOTE_URL}/auth/token",
+            json={"access_token": "real-access-token", "token_type": "Bearer"},
+        )
+        aioclient_mock.get(
+            f"{REMOTE_URL}/api/",
+            json={"location_name": REMOTE_NAME},
+        )
+
+        with patch.object(manager._store._store, "async_delay_save"):
+            host = await manager.async_connect(REMOTE_URL, "admin", "password")
+
+        assert host.name == REMOTE_NAME
+        assert host.status == REMOTE_HOST_STATUS_CONNECTED
+
     async def test_connect_unreachable(
         self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
     ) -> None:
