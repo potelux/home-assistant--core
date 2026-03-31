@@ -67,7 +67,8 @@ def _make_host(
 ) -> RemoteHost:
     """Return a minimal RemoteHost for testing."""
     f = fernet or Fernet(Fernet.generate_key())
-    encrypted_token = f.encrypt(b"test-token").decode()
+    # Use a JWT-shaped token (starts with "ey") so _async_get_access_token returns it directly
+    encrypted_token = f.encrypt(b"eyTestAccessToken").decode()
     return RemoteHost(
         id=host_id,
         name=name,
@@ -219,7 +220,7 @@ class TestRemoteHostManager:
         with patch.object(manager._store._store, "async_load", return_value=None):
             await manager.async_setup()
 
-        # Mock the remote HA authentication responses
+        # Mock server returns access_token directly (no refresh token)
         aioclient_mock.post(
             f"{REMOTE_URL}/auth/login_flow",
             json={"flow_id": "abc123", "type": "form"},
@@ -228,11 +229,11 @@ class TestRemoteHostManager:
             f"{REMOTE_URL}/auth/login_flow/abc123",
             json={
                 "type": "create_entry",
-                "result": {"access_token": "short-lived-token"},
+                "result": {"access_token": "eyMockAccessToken"},
             },
         )
         aioclient_mock.get(
-            f"{REMOTE_URL}/api/",
+            f"{REMOTE_URL}/api/config",
             json={"location_name": REMOTE_NAME},
         )
 
@@ -274,7 +275,7 @@ class TestRemoteHostManager:
         with patch.object(manager._store._store, "async_load", return_value=None):
             await manager.async_setup()
 
-        # Real HA returns an authorization code string, not access_token directly
+        # Real HA returns an authorization code string → exchange for refresh+access token
         aioclient_mock.post(
             f"{REMOTE_URL}/auth/login_flow",
             json={"flow_id": "abc123", "type": "form"},
@@ -285,10 +286,15 @@ class TestRemoteHostManager:
         )
         aioclient_mock.post(
             f"{REMOTE_URL}/auth/token",
-            json={"access_token": "real-access-token", "token_type": "Bearer"},
+            json={
+                "access_token": "eyShortLivedToken",
+                "refresh_token": "long-lived-refresh-token",
+                "token_type": "Bearer",
+                "expires_in": 1800,
+            },
         )
         aioclient_mock.get(
-            f"{REMOTE_URL}/api/",
+            f"{REMOTE_URL}/api/config",
             json={"location_name": REMOTE_NAME},
         )
 
@@ -297,6 +303,9 @@ class TestRemoteHostManager:
 
         assert host.name == REMOTE_NAME
         assert host.status == REMOTE_HOST_STATUS_CONNECTED
+        # Refresh token (not access token) should be stored
+        decrypted = manager._store.decrypt_token(host.encrypted_token)
+        assert decrypted == "long-lived-refresh-token"
 
     async def test_connect_unreachable(
         self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker

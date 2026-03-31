@@ -325,7 +325,8 @@ class RemoteHostManager:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise RemoteHostConnectionError(f"Cannot reach {url}: {err}") from err
 
-        # Step 2b: Exchange authorization code for access token (real HA auth flow)
+        # Step 2b: Exchange authorization code for refresh + access tokens (real HA auth flow)
+        refresh_token: str = ""
         if not access_token:
             try:
                 async with self._websession.post(
@@ -344,6 +345,7 @@ class RemoteHostManager:
                         )
                     token_data = await resp.json()
                     access_token = token_data.get("access_token", "")
+                    refresh_token = token_data.get("refresh_token", "")
                     if not access_token:
                         raise RemoteHostAuthError(
                             "No access_token in token exchange response"
@@ -351,10 +353,10 @@ class RemoteHostManager:
             except (aiohttp.ClientError, TimeoutError) as err:
                 raise RemoteHostConnectionError(f"Cannot reach {url}: {err}") from err
 
-        # Step 3: Verify the token works and fetch the instance name
+        # Step 3: Verify the token and fetch the instance name from /api/config
         try:
             async with self._websession.get(
-                f"{url}/api/",
+                f"{url}/api/config",
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=aiohttp.ClientTimeout(total=CONNECTION_TIMEOUT),
             ) as resp:
@@ -371,7 +373,10 @@ class RemoteHostManager:
                 f"Cannot verify connection to {url}: {err}"
             ) from err
 
-        encrypted_token = self._store.encrypt_token(access_token)
+        # Prefer the long-lived refresh token; fall back to access token for environments
+        # (like the mock server) that don't issue refresh tokens.
+        token_to_store = refresh_token or access_token
+        encrypted_token = self._store.encrypt_token(token_to_store)
         now = utcnow()
         host = RemoteHost(
             id=str(uuid.uuid4()),
@@ -435,7 +440,7 @@ class RemoteHostManager:
         new_last_seen = host.last_seen
 
         try:
-            token = self._store.decrypt_token(host.encrypted_token)
+            token = await self._async_get_access_token(host)
             async with self._websession.get(
                 f"{host.url}/api/",
                 headers={"Authorization": f"Bearer {token}"},
@@ -463,6 +468,47 @@ class RemoteHostManager:
         self._store.add(updated)
         return updated
 
+    async def _async_get_access_token(self, host: RemoteHost) -> str:
+        """Exchange the stored refresh token for a fresh short-lived access token.
+
+        For environments that stored an access token directly (e.g. the mock server),
+        the stored value is returned as-is.
+        """
+        stored = self._store.decrypt_token(host.encrypted_token)
+        # Refresh tokens are long hex strings; access tokens are JWTs starting with "ey".
+        # If it looks like an access token already, use it directly.
+        if stored.startswith("ey"):
+            return stored
+        try:
+            async with self._websession.post(
+                f"{host.url}/auth/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": stored,
+                    "client_id": host.url,
+                },
+                timeout=aiohttp.ClientTimeout(total=CONNECTION_TIMEOUT),
+            ) as resp:
+                if resp.status in (400, 401):
+                    raise RemoteHostAuthError(
+                        f"Refresh token for '{host.name}' is invalid or expired"
+                    )
+                if resp.status != 200:
+                    raise RemoteHostConnectionError(
+                        f"Token refresh for '{host.name}' returned HTTP {resp.status}"
+                    )
+                data = await resp.json()
+                access_token = data.get("access_token", "")
+                if not access_token:
+                    raise RemoteHostAuthError(
+                        f"No access_token in refresh response for '{host.name}'"
+                    )
+                return access_token
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise RemoteHostConnectionError(
+                f"Remote '{host.name}' is unreachable: {err}"
+            ) from err
+
     async def _async_ws_supervisor_call(
         self, host: RemoteHost, endpoint: str, method: str = "get"
     ) -> dict[str, Any]:
@@ -471,7 +517,7 @@ class RemoteHostManager:
         HA's HTTP proxy blocks most Supervisor endpoints for external clients;
         the WebSocket supervisor/api command is the supported path.
         """
-        token = self._store.decrypt_token(host.encrypted_token)
+        token = await self._async_get_access_token(host)
         ws_url = (
             host.url.replace("https://", "wss://").replace("http://", "ws://")
             + "/api/websocket"
@@ -546,7 +592,7 @@ class RemoteHostManager:
             raise RemoteHostNotFoundError(f"Remote host {host_id!r} not found")
 
         try:
-            token = self._store.decrypt_token(host.encrypted_token)
+            token = await self._async_get_access_token(host)
             async with self._websession.get(
                 f"{host.url}/api/hassio/addons/{addon_slug}/logs",
                 headers={"Authorization": f"Bearer {token}"},

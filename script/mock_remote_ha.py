@@ -26,9 +26,11 @@ _LOGGER = logging.getLogger("mock_remote_ha")
 VALID_USERNAME = "admin"
 VALID_PASSWORD = "password"
 
-# Issued tokens (flow_id -> state, token -> valid)
+# Auth state
 _flows: dict[str, str] = {}
+_auth_codes: dict[str, tuple[str, str]] = {}  # code -> (access_token, refresh_token)
 _tokens: set[str] = set()
+_refresh_tokens: dict[str, str] = {}  # refresh_token -> current access_token
 
 FAKE_ADDONS = [
     {
@@ -154,17 +156,60 @@ async def handle_login_flow_step(request: web.Request) -> web.Response:
             status=401,
         )
 
-    token = f"mock-token-{uuid.uuid4().hex}"
-    _tokens.add(token)
+    access_token = f"eyMock.{uuid.uuid4().hex}"
+    refresh_token = f"mock-refresh-{uuid.uuid4().hex}"
+    auth_code = uuid.uuid4().hex
+    _auth_codes[auth_code] = (access_token, refresh_token)
     del _flows[flow_id]
-    _LOGGER.info("Login success, issued token for user %r", username)
+    _LOGGER.info("Login success, issued auth code for user %r", username)
     return web.json_response(
         {
             "type": "create_entry",
-            "result": {"access_token": token},
+            "result": auth_code,
             "flow_id": flow_id,
         }
     )
+
+
+async def handle_token_exchange(request: web.Request) -> web.Response:
+    """POST /auth/token — exchange authorization code or refresh token for access token."""
+    body = await request.post()
+    grant_type = body.get("grant_type", "")
+
+    if grant_type == "authorization_code":
+        code = body.get("code", "")
+        if code not in _auth_codes:
+            return web.json_response({"error": "invalid_grant"}, status=400)
+        access_token, refresh_token = _auth_codes.pop(code)
+        _tokens.add(access_token)
+        _refresh_tokens[refresh_token] = access_token
+        _LOGGER.info("Authorization code exchanged for tokens")
+        return web.json_response(
+            {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_type": "Bearer",
+                "expires_in": 1800,
+            }
+        )
+
+    if grant_type == "refresh_token":
+        refresh_token = body.get("refresh_token", "")
+        if refresh_token not in _refresh_tokens:
+            return web.json_response({"error": "invalid_grant"}, status=400)
+        new_access = f"eyMock.{uuid.uuid4().hex}"
+        _tokens.add(new_access)
+        _refresh_tokens[refresh_token] = new_access
+        _LOGGER.info("Refresh token exchanged for new access token")
+        return web.json_response(
+            {
+                "access_token": new_access,
+                "token_type": "Bearer",
+                "expires_in": 1800,
+            }
+        )
+
+    return web.json_response({"error": "unsupported_grant_type"}, status=400)
 
 
 async def handle_token_delete(request: web.Request) -> web.Response:
@@ -182,15 +227,22 @@ async def handle_token_delete(request: web.Request) -> web.Response:
 
 
 async def handle_api_root(request: web.Request) -> web.Response:
-    """GET /api/ — return basic instance info (used for token verification)."""
+    """GET /api/ — basic status (no location_name; use /api/config for that)."""
+    if not _require_auth(request):
+        return web.json_response({"message": "Unauthorized"}, status=401)
+    return web.json_response({"message": "API running."})
+
+
+async def handle_api_config(request: web.Request) -> web.Response:
+    """GET /api/config — return instance config including location_name."""
     if not _require_auth(request):
         return web.json_response({"message": "Unauthorized"}, status=401)
     return web.json_response(
         {
-            "message": "API running.",
             "location_name": "Mock Remote HA",
             "version": "2026.3.0",
             "config_dir": "/config",
+            "components": ["hassio"],
         }
     )
 
@@ -319,8 +371,10 @@ def build_app() -> web.Application:
     app = web.Application()
     app.router.add_post("/auth/login_flow", handle_login_flow_start)
     app.router.add_post("/auth/login_flow/{flow_id}", handle_login_flow_step)
+    app.router.add_post("/auth/token", handle_token_exchange)
     app.router.add_delete("/auth/token", handle_token_delete)
     app.router.add_get("/api/", handle_api_root)
+    app.router.add_get("/api/config", handle_api_config)
     app.router.add_get("/api/websocket", handle_websocket)
     app.router.add_get("/api/hassio/addons/{slug}/logs", handle_addon_logs)
     return app
