@@ -300,7 +300,7 @@ class RemoteHostManager:
         try:
             async with self._websession.post(
                 f"{url}/auth/login_flow/{flow_id}",
-                json={"username": username, "password": password},
+                json={"client_id": url, "username": username, "password": password},
                 timeout=aiohttp.ClientTimeout(total=CONNECTION_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
