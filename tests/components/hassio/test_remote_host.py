@@ -1,6 +1,8 @@
 """Tests for remote host management in the hassio integration."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -22,6 +24,35 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from tests.test_util.aiohttp import AiohttpClientMocker
+
+
+def _make_ws_mock(*json_responses: dict[str, Any]) -> MagicMock:
+    """Return a mock WebSocket context manager yielding the given JSON messages."""
+    responses = list(json_responses)
+    idx = 0
+
+    async def _receive_json() -> dict[str, Any]:
+        nonlocal idx
+        result = responses[idx]
+        idx += 1
+        return result
+
+    ws = MagicMock()
+    ws.receive_json = _receive_json
+    ws.send_json = AsyncMock()
+    ws.__aenter__ = AsyncMock(return_value=ws)
+    ws.__aexit__ = AsyncMock(return_value=False)
+    return ws
+
+
+def _ws_ok(*extra: dict[str, Any]) -> Sequence[dict[str, Any]]:
+    """Return auth handshake messages followed by extra result messages."""
+    return (
+        {"type": "auth_required"},
+        {"type": "auth_ok"},
+        *extra,
+    )
+
 
 REMOTE_URL = "http://192.168.1.50:8123"
 REMOTE_NAME = "Basement HA"
@@ -394,11 +425,9 @@ class TestRemoteHostManager:
 
         assert await manager.async_remove_host("missing-id") is False
 
-    async def test_get_remote_addons(
-        self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-    ) -> None:
-        """async_get_remote_addons should return the addon list from the remote."""
-        session = async_get_clientsession(hass)
+    async def test_get_remote_addons(self, hass: HomeAssistant) -> None:
+        """async_get_remote_addons should return the addon list via WebSocket."""
+        session = MagicMock(spec=aiohttp.ClientSession)
         manager = RemoteHostManager(hass, session)
         with patch.object(manager._store._store, "async_load", return_value=None):
             await manager.async_setup()
@@ -408,21 +437,26 @@ class TestRemoteHostManager:
         with patch.object(manager._store._store, "async_delay_save"):
             manager._store.add(host)
 
-        aioclient_mock.get(
-            f"{REMOTE_URL}/api/hassio/addons",
-            json={"data": {"addons": [{"slug": "test", "name": "Test Addon"}]}},
+        ws = _make_ws_mock(
+            *_ws_ok(
+                {
+                    "id": 1,
+                    "type": "result",
+                    "success": True,
+                    "result": {"addons": [{"slug": "test", "name": "Test Addon"}]},
+                }
+            )
         )
+        session.ws_connect = MagicMock(return_value=ws)
 
         addons = await manager.async_get_remote_addons(host.id)
 
         assert len(addons) == 1
         assert addons[0]["slug"] == "test"
 
-    async def test_get_remote_addons_unauthorized(
-        self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-    ) -> None:
-        """async_get_remote_addons should raise RemoteHostAuthError on 401."""
-        session = async_get_clientsession(hass)
+    async def test_get_remote_addons_unauthorized(self, hass: HomeAssistant) -> None:
+        """async_get_remote_addons should raise RemoteHostAuthError when token is rejected."""
+        session = MagicMock(spec=aiohttp.ClientSession)
         manager = RemoteHostManager(hass, session)
         with patch.object(manager._store._store, "async_load", return_value=None):
             await manager.async_setup()
@@ -432,7 +466,11 @@ class TestRemoteHostManager:
         with patch.object(manager._store._store, "async_delay_save"):
             manager._store.add(host)
 
-        aioclient_mock.get(f"{REMOTE_URL}/api/hassio/addons", status=401)
+        ws = _make_ws_mock(
+            {"type": "auth_required"},
+            {"type": "auth_invalid", "message": "Invalid access token"},
+        )
+        session.ws_connect = MagicMock(return_value=ws)
 
         with pytest.raises(RemoteHostAuthError):
             await manager.async_get_remote_addons(host.id)
@@ -447,11 +485,9 @@ class TestRemoteHostManager:
         with pytest.raises(RemoteHostNotFoundError):
             await manager.async_get_remote_addons("missing-id")
 
-    async def test_get_remote_addon_info(
-        self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-    ) -> None:
-        """async_get_remote_addon_info should return addon details from the remote."""
-        session = async_get_clientsession(hass)
+    async def test_get_remote_addon_info(self, hass: HomeAssistant) -> None:
+        """async_get_remote_addon_info should return addon details via WebSocket."""
+        session = MagicMock(spec=aiohttp.ClientSession)
         manager = RemoteHostManager(hass, session)
         with patch.object(manager._store._store, "async_load", return_value=None):
             await manager.async_setup()
@@ -461,21 +497,30 @@ class TestRemoteHostManager:
         with patch.object(manager._store._store, "async_delay_save"):
             manager._store.add(host)
 
-        aioclient_mock.get(
-            f"{REMOTE_URL}/api/hassio/addons/test/info",
-            json={"data": {"slug": "test", "name": "Test Addon", "version": "1.0.0"}},
+        ws = _make_ws_mock(
+            *_ws_ok(
+                {
+                    "id": 1,
+                    "type": "result",
+                    "success": True,
+                    "result": {
+                        "slug": "test",
+                        "name": "Test Addon",
+                        "version": "1.0.0",
+                    },
+                }
+            )
         )
+        session.ws_connect = MagicMock(return_value=ws)
 
         info = await manager.async_get_remote_addon_info(host.id, "test")
 
         assert info["slug"] == "test"
         assert info["version"] == "1.0.0"
 
-    async def test_get_remote_addon_info_not_found(
-        self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
-    ) -> None:
-        """async_get_remote_addon_info should raise RemoteHostNotFoundError on 404."""
-        session = async_get_clientsession(hass)
+    async def test_get_remote_addon_info_not_found(self, hass: HomeAssistant) -> None:
+        """async_get_remote_addon_info should raise RemoteHostConnectionError when addon missing."""
+        session = MagicMock(spec=aiohttp.ClientSession)
         manager = RemoteHostManager(hass, session)
         with patch.object(manager._store._store, "async_load", return_value=None):
             await manager.async_setup()
@@ -485,9 +530,19 @@ class TestRemoteHostManager:
         with patch.object(manager._store._store, "async_delay_save"):
             manager._store.add(host)
 
-        aioclient_mock.get(f"{REMOTE_URL}/api/hassio/addons/missing/info", status=404)
+        ws = _make_ws_mock(
+            *_ws_ok(
+                {
+                    "id": 1,
+                    "type": "result",
+                    "success": False,
+                    "error": {"code": "unknown_error", "message": "Addon not found"},
+                }
+            )
+        )
+        session.ws_connect = MagicMock(return_value=ws)
 
-        with pytest.raises(RemoteHostNotFoundError):
+        with pytest.raises(RemoteHostConnectionError):
             await manager.async_get_remote_addon_info(host.id, "missing")
 
     async def test_get_remote_addon_logs(

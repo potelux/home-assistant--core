@@ -11,9 +11,12 @@ Then in HA's developer tools WebSocket console, connect a remote host:
 """
 
 import argparse
+import json
 import logging
+import re
 import uuid
 
+import aiohttp
 from aiohttp import web
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -226,6 +229,87 @@ async def handle_addon_logs(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# WebSocket endpoint (mirrors real HA's /api/websocket)
+# ---------------------------------------------------------------------------
+
+_ADDON_INFO_RE = re.compile(r"^/addons/([^/]+)/info$")
+
+
+async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
+    """GET /api/websocket — WebSocket endpoint for supervisor/api commands."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    await ws.send_json({"type": "auth_required", "ha_version": "2026.3.0"})
+
+    auth_msg = await ws.receive_json()
+    if auth_msg.get("type") != "auth" or auth_msg.get("access_token") not in _tokens:
+        await ws.send_json({"type": "auth_invalid", "message": "Invalid access token"})
+        await ws.close()
+        return ws
+
+    await ws.send_json({"type": "auth_ok", "ha_version": "2026.3.0"})
+    _LOGGER.info("WebSocket client authenticated")
+
+    async for raw_msg in ws:
+        if raw_msg.type == aiohttp.WSMsgType.TEXT:
+            msg = json.loads(raw_msg.data)
+            msg_id = msg.get("id", 1)
+            msg_type = msg.get("type", "")
+
+            if msg_type == "supervisor/api":
+                endpoint = msg.get("endpoint", "")
+                if endpoint == "/addons":
+                    await ws.send_json(
+                        {
+                            "id": msg_id,
+                            "type": "result",
+                            "success": True,
+                            "result": {"addons": FAKE_ADDONS, "repositories": []},
+                        }
+                    )
+                elif m := _ADDON_INFO_RE.match(endpoint):
+                    slug = m.group(1)
+                    if slug in FAKE_ADDON_INFO:
+                        await ws.send_json(
+                            {
+                                "id": msg_id,
+                                "type": "result",
+                                "success": True,
+                                "result": FAKE_ADDON_INFO[slug],
+                            }
+                        )
+                    else:
+                        await ws.send_json(
+                            {
+                                "id": msg_id,
+                                "type": "result",
+                                "success": False,
+                                "error": {
+                                    "code": "unknown_error",
+                                    "message": f"Addon {slug!r} not found",
+                                },
+                            }
+                        )
+                else:
+                    await ws.send_json(
+                        {
+                            "id": msg_id,
+                            "type": "result",
+                            "success": False,
+                            "error": {
+                                "code": "unknown_command",
+                                "message": f"Unknown endpoint: {endpoint}",
+                            },
+                        }
+                    )
+        elif raw_msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+            break
+
+    return ws
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
@@ -237,8 +321,7 @@ def build_app() -> web.Application:
     app.router.add_post("/auth/login_flow/{flow_id}", handle_login_flow_step)
     app.router.add_delete("/auth/token", handle_token_delete)
     app.router.add_get("/api/", handle_api_root)
-    app.router.add_get("/api/hassio/addons", handle_addons_list)
-    app.router.add_get("/api/hassio/addons/{slug}/info", handle_addon_info)
+    app.router.add_get("/api/websocket", handle_websocket)
     app.router.add_get("/api/hassio/addons/{slug}/logs", handle_addon_logs)
     return app
 

@@ -463,70 +463,84 @@ class RemoteHostManager:
         self._store.add(updated)
         return updated
 
+    async def _async_ws_supervisor_call(
+        self, host: RemoteHost, endpoint: str, method: str = "get"
+    ) -> dict[str, Any]:
+        """Call the Supervisor API on a remote host via WebSocket.
+
+        HA's HTTP proxy blocks most Supervisor endpoints for external clients;
+        the WebSocket supervisor/api command is the supported path.
+        """
+        token = self._store.decrypt_token(host.encrypted_token)
+        ws_url = (
+            host.url.replace("https://", "wss://").replace("http://", "ws://")
+            + "/api/websocket"
+        )
+        try:
+            async with self._websession.ws_connect(
+                ws_url,
+                timeout=aiohttp.ClientWSTimeout(ws_close=CONNECTION_TIMEOUT),
+            ) as ws:
+                msg = await asyncio.wait_for(ws.receive_json(), CONNECTION_TIMEOUT)
+                if msg.get("type") != "auth_required":
+                    raise RemoteHostConnectionError(
+                        f"Unexpected WebSocket response from '{host.name}'"
+                    )
+                await ws.send_json({"type": "auth", "access_token": token})
+                msg = await asyncio.wait_for(ws.receive_json(), CONNECTION_TIMEOUT)
+                if msg.get("type") == "auth_invalid":
+                    raise RemoteHostAuthError(
+                        f"Token for '{host.name}' is invalid or expired"
+                    )
+                if msg.get("type") != "auth_ok":
+                    raise RemoteHostConnectionError(
+                        f"WebSocket authentication failed for '{host.name}'"
+                    )
+                await ws.send_json(
+                    {
+                        "id": 1,
+                        "type": "supervisor/api",
+                        "endpoint": endpoint,
+                        "method": method,
+                    }
+                )
+                msg = await asyncio.wait_for(ws.receive_json(), CONNECTION_TIMEOUT)
+                if not msg.get("success"):
+                    raise RemoteHostConnectionError(
+                        f"Supervisor API '{endpoint}' failed on '{host.name}'"
+                    )
+                return msg.get("result", {})
+        except RemoteHostError:
+            raise
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise RemoteHostConnectionError(
+                f"Remote '{host.name}' is unreachable: {err}"
+            ) from err
+
     async def async_get_remote_addons(self, host_id: str) -> list[dict[str, Any]]:
-        """Query a remote host for its installed addon list (no caching)."""
+        """Query a remote host for its installed addon list via WebSocket."""
         host = self._store.get(host_id)
         if host is None:
             raise RemoteHostNotFoundError(f"Remote host {host_id!r} not found")
 
-        try:
-            token = self._store.decrypt_token(host.encrypted_token)
-            async with self._websession.get(
-                f"{host.url}/api/hassio/addons",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=aiohttp.ClientTimeout(total=CONNECTION_TIMEOUT),
-            ) as resp:
-                if resp.status == 401:
-                    raise RemoteHostAuthError(
-                        f"Token for '{host.name}' is invalid or expired"
-                    )
-                if resp.status != 200:
-                    raise RemoteHostConnectionError(
-                        f"Remote '{host.name}' returned HTTP {resp.status}"
-                    )
-                data = await resp.json()
-                return data.get("data", {}).get("addons", [])
-        except (TimeoutError, aiohttp.ClientError) as err:
-            raise RemoteHostConnectionError(
-                f"Remote '{host.name}' is unreachable: {err}"
-            ) from err
+        result = await self._async_ws_supervisor_call(host, "/addons")
+        return result.get("addons", [])
 
     async def async_get_remote_addon_info(
         self, host_id: str, addon_slug: str
     ) -> dict[str, Any]:
-        """Fetch detailed info for a specific addon on a remote host."""
+        """Fetch detailed info for a specific addon on a remote host via WebSocket."""
         host = self._store.get(host_id)
         if host is None:
             raise RemoteHostNotFoundError(f"Remote host {host_id!r} not found")
 
-        try:
-            token = self._store.decrypt_token(host.encrypted_token)
-            async with self._websession.get(
-                f"{host.url}/api/hassio/addons/{addon_slug}/info",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=aiohttp.ClientTimeout(total=CONNECTION_TIMEOUT),
-            ) as resp:
-                if resp.status == 401:
-                    raise RemoteHostAuthError(
-                        f"Token for '{host.name}' is invalid or expired"
-                    )
-                if resp.status == 404:
-                    raise RemoteHostNotFoundError(
-                        f"Addon '{addon_slug}' not found on '{host.name}'"
-                    )
-                if resp.status != 200:
-                    raise RemoteHostConnectionError(
-                        f"Remote '{host.name}' returned HTTP {resp.status}"
-                    )
-                data = await resp.json()
-                return data.get("data", {})
-        except (TimeoutError, aiohttp.ClientError) as err:
-            raise RemoteHostConnectionError(
-                f"Remote '{host.name}' is unreachable: {err}"
-            ) from err
+        return await self._async_ws_supervisor_call(host, f"/addons/{addon_slug}/info")
 
     async def async_get_remote_addon_logs(self, host_id: str, addon_slug: str) -> str:
-        """Fetch logs for a specific addon on a remote host."""
+        """Fetch logs for a specific addon on a remote host.
+
+        Uses the HTTP proxy which allows addon log paths for admin users.
+        """
         host = self._store.get(host_id)
         if host is None:
             raise RemoteHostNotFoundError(f"Remote host {host_id!r} not found")
