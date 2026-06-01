@@ -33,7 +33,7 @@ from homeassistant.helpers.service import (
 )
 from homeassistant.helpers.state import async_reproduce_state
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
-from homeassistant.loader import async_get_integration
+from homeassistant.loader import IntegrationNotFound, async_get_integration
 
 from .const import DOMAIN
 
@@ -133,6 +133,21 @@ class SceneConfig(NamedTuple):
     name: str
     icon: str | None
     states: dict[str, State]
+
+
+async def _async_snapshot_state(hass: HomeAssistant, state: State) -> State:
+    """Return a state snapshot for scene restore."""
+    try:
+        integration = await async_get_integration(hass, state.domain)
+    except IntegrationNotFound:
+        return state
+
+    try:
+        platform = await integration.async_get_platform("scene_state")
+    except ImportError:
+        return state
+
+    return await platform.async_scene_snapshot_state(hass, state)
 
 
 @callback
@@ -251,7 +266,7 @@ async def async_setup_platform(
                     entity_id,
                 )
                 continue
-            entities[entity_id] = State(entity_id, state.state, state.attributes)
+            entities[entity_id] = await _async_snapshot_state(hass, state)
 
         if not entities:
             _LOGGER.warning("Empty scenes are not allowed")

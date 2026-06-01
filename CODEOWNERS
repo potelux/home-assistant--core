@@ -321,6 +321,8 @@ CLAUDE.md @home-assistant/core
 /tests/components/compensation/ @Petro31
 /homeassistant/components/compit/ @Przemko92
 /tests/components/compit/ @Przemko92
+/homeassistant/components/composite/ @home-assistant/core
+/tests/components/composite/ @home-assistant/core
 /homeassistant/components/config/ @home-assistant/core
 /tests/components/config/ @home-assistant/core
 /homeassistant/components/configurator/ @home-assistant/core
