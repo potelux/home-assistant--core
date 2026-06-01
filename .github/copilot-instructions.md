@@ -35,6 +35,43 @@ Integrations with Platinum or Gold level in the Integration Quality Scale reflec
 When reviewing entity actions, do not suggest extra defensive checks for input fields that are already validated by Home Assistant's service/action schemas and entity selection filters. Suggest additional guards only when data bypasses those validators or is transformed into a less-safe form.
 When validation guarantees a dict key exists, prefer direct key access (`data["key"]`) instead of `.get("key")` so contract violations are surfaced instead of silently masked.
 
+## Cursor Cloud specific instructions
+
+Home Assistant Core is a **single Python process** (default UI/API on port **8123**). The bundled frontend comes from the `home-assistant-frontend` wheel; you do not run a separate frontend dev server in this repo.
+
+### Python and virtualenv
+
+- Requires **Python 3.14.2+** (see `.python-version`). Install with `uv python install 3.14.2`, then `uv venv .venv --python 3.14.2`.
+- Activate before commands: `source .venv/bin/activate` (or use `.venv/bin/python` / `.venv/bin/pytest` explicitly).
+- One-time setup: `./script/setup` (creates `config/`, runs `script/bootstrap`, installs `prek` hooks). `script/bootstrap` installs editable core plus `requirements_test_all.txt` and compiles translations.
+
+### System packages (Cloud VM)
+
+Native wheels in test deps may need build tools. If `uv pip install` fails building extensions (e.g. `dtlssocket`, `pyspeex-noise`), install at least: `autoconf`, `cmake`, `build-essential`, `libudev-dev`, `libyaml-dev`, `libxml2`. Force the GNU toolchain when building: `CC=gcc CXX=g++` (default `c++` on Ubuntu may be Clang without full libstdc++ headers).
+
+### Running Core
+
+```bash
+source .venv/bin/activate
+python -m homeassistant -c ./config
+```
+
+Use a **tmux** session for long-running dev servers (see cloud agent shell rules). First visit runs onboarding at http://127.0.0.1:8123/.
+
+### Lint and test
+
+Standard commands are in `.vscode/tasks.json`. Typical checks:
+
+- `prek run ruff-check --files <paths>` or `prek run --show-diff-on-failure`
+- `pytest tests` (VS Code default adds `--timeout=10`)
+- `python -m script.translations develop --all` before run/tests if translation sources changed
+
+If `prek install` refuses to run because `core.hooksPath` is set, unset it (`git config --unset-all --global core.hooksPath` and local) then retry.
+
+### External services
+
+No Docker/MQTT/database is required for default dev or most tests. MariaDB/PostgreSQL containers are only for optional CI-style recorder tests.
+
 
 # Skills
 
