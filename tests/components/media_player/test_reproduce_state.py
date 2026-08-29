@@ -3,9 +3,12 @@
 import pytest
 
 from homeassistant.components.media_player import (
+    ATTR_APP_ID,
+    ATTR_APP_NAME,
     ATTR_INPUT_SOURCE,
     ATTR_MEDIA_CONTENT_ID,
     ATTR_MEDIA_CONTENT_TYPE,
+    ATTR_MEDIA_EXTRA,
     ATTR_MEDIA_VOLUME_LEVEL,
     ATTR_MEDIA_VOLUME_MUTED,
     ATTR_SOUND_MODE,
@@ -14,6 +17,7 @@ from homeassistant.components.media_player import (
     SERVICE_SELECT_SOUND_MODE,
     SERVICE_SELECT_SOURCE,
     MediaPlayerEntityFeature,
+    MediaType,
 )
 from homeassistant.components.media_player.reproduce_state import async_reproduce_states
 from homeassistant.const import (
@@ -293,4 +297,95 @@ async def test_play_media(hass: HomeAssistant) -> None:
         "entity_id": ENTITY_1,
         ATTR_MEDIA_CONTENT_TYPE: value_1,
         ATTR_MEDIA_CONTENT_ID: value_2,
+    }
+
+
+async def test_play_media_with_extra(hass: HomeAssistant) -> None:
+    """Test restoring media with extra deeplink data."""
+    hass.states.async_set(
+        ENTITY_1,
+        "something",
+        {ATTR_SUPPORTED_FEATURES: MediaPlayerEntityFeature.PLAY_MEDIA},
+    )
+    calls = async_mock_service(hass, DOMAIN, SERVICE_PLAY_MEDIA)
+
+    await async_reproduce_states(
+        hass,
+        [
+            State(
+                ENTITY_1,
+                None,
+                {
+                    ATTR_MEDIA_CONTENT_TYPE: MediaType.APP,
+                    ATTR_MEDIA_CONTENT_ID: "291097",
+                    ATTR_MEDIA_EXTRA: {
+                        "content_id": "movie-123",
+                        "media_type": "movie",
+                    },
+                },
+            )
+        ],
+    )
+
+    assert len(calls) == 1
+    assert calls[0].data == {
+        "entity_id": ENTITY_1,
+        ATTR_MEDIA_CONTENT_TYPE: MediaType.APP,
+        ATTR_MEDIA_CONTENT_ID: "291097",
+        ATTR_MEDIA_EXTRA: {
+            "content_id": "movie-123",
+            "media_type": "movie",
+        },
+    }
+
+
+async def test_restore_app_id_with_play_media(hass: HomeAssistant) -> None:
+    """Test restoring app id with the generic play_media app contract."""
+    hass.states.async_set(
+        ENTITY_1,
+        "something",
+        {ATTR_SUPPORTED_FEATURES: MediaPlayerEntityFeature.PLAY_MEDIA},
+    )
+    calls = async_mock_service(hass, DOMAIN, SERVICE_PLAY_MEDIA)
+
+    await async_reproduce_states(
+        hass,
+        [
+            State(
+                ENTITY_1,
+                None,
+                {
+                    ATTR_APP_ID: "12",
+                    ATTR_APP_NAME: "Netflix",
+                },
+            )
+        ],
+    )
+
+    assert len(calls) == 1
+    assert calls[0].data == {
+        "entity_id": ENTITY_1,
+        ATTR_MEDIA_CONTENT_TYPE: MediaType.APP,
+        ATTR_MEDIA_CONTENT_ID: "12",
+    }
+
+
+async def test_restore_app_name_with_select_source(hass: HomeAssistant) -> None:
+    """Test restoring app name with select_source when app id is unavailable."""
+    hass.states.async_set(
+        ENTITY_1,
+        "something",
+        {ATTR_SUPPORTED_FEATURES: MediaPlayerEntityFeature.SELECT_SOURCE},
+    )
+    calls = async_mock_service(hass, DOMAIN, SERVICE_SELECT_SOURCE)
+
+    await async_reproduce_states(
+        hass,
+        [State(ENTITY_1, None, {ATTR_APP_NAME: "Netflix"})],
+    )
+
+    assert len(calls) == 1
+    assert calls[0].data == {
+        "entity_id": ENTITY_1,
+        ATTR_INPUT_SOURCE: "Netflix",
     }

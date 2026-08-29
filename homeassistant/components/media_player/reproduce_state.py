@@ -23,9 +23,12 @@ from homeassistant.const import (
 from homeassistant.core import Context, HomeAssistant, State
 
 from .const import (
+    ATTR_APP_ID,
+    ATTR_APP_NAME,
     ATTR_INPUT_SOURCE,
     ATTR_MEDIA_CONTENT_ID,
     ATTR_MEDIA_CONTENT_TYPE,
+    ATTR_MEDIA_EXTRA,
     ATTR_MEDIA_VOLUME_LEVEL,
     ATTR_MEDIA_VOLUME_MUTED,
     ATTR_SOUND_MODE,
@@ -34,6 +37,7 @@ from .const import (
     SERVICE_SELECT_SOUND_MODE,
     SERVICE_SELECT_SOURCE,
     MediaPlayerEntityFeature,
+    MediaType,
 )
 
 
@@ -48,12 +52,16 @@ async def _async_reproduce_states(
     cur_state = hass.states.get(state.entity_id)
     features = cur_state.attributes[ATTR_SUPPORTED_FEATURES] if cur_state else 0
 
-    async def call_service(service: str, keys: Iterable[str]) -> None:
+    async def call_service(
+        service: str, keys: Iterable[str], extra_data: dict[str, Any] | None = None
+    ) -> None:
         """Call service with set of attributes given."""
         data = {"entity_id": state.entity_id}
         for key in keys:
             if key in state.attributes:
                 data[key] = state.attributes[key]
+        if extra_data:
+            data.update(extra_data)
 
         await hass.services.async_call(
             DOMAIN, service, data, blocking=True, context=context
@@ -82,11 +90,13 @@ async def _async_reproduce_states(
     features = cur_state.attributes[ATTR_SUPPORTED_FEATURES] if cur_state else 0
 
     # First set source & sound mode to match the saved supported features
+    source_selected = False
     if (
         ATTR_INPUT_SOURCE in state.attributes
         and features & MediaPlayerEntityFeature.SELECT_SOURCE
     ):
         await call_service(SERVICE_SELECT_SOURCE, [ATTR_INPUT_SOURCE])
+        source_selected = True
 
     if (
         ATTR_SOUND_MODE in state.attributes
@@ -114,9 +124,33 @@ async def _async_reproduce_states(
         if features & MediaPlayerEntityFeature.PLAY_MEDIA:
             await call_service(
                 SERVICE_PLAY_MEDIA,
-                [ATTR_MEDIA_CONTENT_TYPE, ATTR_MEDIA_CONTENT_ID],
+                [ATTR_MEDIA_CONTENT_TYPE, ATTR_MEDIA_CONTENT_ID, ATTR_MEDIA_EXTRA],
             )
         already_playing = True
+    elif (
+        not source_selected
+        and ATTR_APP_ID in state.attributes
+        and features & MediaPlayerEntityFeature.PLAY_MEDIA
+    ):
+        await call_service(
+            SERVICE_PLAY_MEDIA,
+            [],
+            {
+                ATTR_MEDIA_CONTENT_TYPE: MediaType.APP,
+                ATTR_MEDIA_CONTENT_ID: str(state.attributes[ATTR_APP_ID]),
+            },
+        )
+        already_playing = True
+    elif (
+        not source_selected
+        and ATTR_APP_NAME in state.attributes
+        and features & MediaPlayerEntityFeature.SELECT_SOURCE
+    ):
+        await call_service(
+            SERVICE_SELECT_SOURCE,
+            [],
+            {ATTR_INPUT_SOURCE: state.attributes[ATTR_APP_NAME]},
+        )
 
     if (
         not already_playing

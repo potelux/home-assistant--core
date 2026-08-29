@@ -1,0 +1,9 @@
+{
+  "domain": "composite",
+  "name": "Composite",
+  "codeowners": ["@home-assistant/core"],
+  "documentation": "https://www.home-assistant.io/integrations/composite",
+  "integration_type": "helper",
+  "iot_class": "calculated",
+  "quality_scale": "internal"
+}
